@@ -147,6 +147,60 @@ describe('real-home user hook trust rebasing', () => {
     }
   })
 
+  it('runs WSL trust rebasing against the distro real home', () => {
+    const orca = command('orca-hook')
+    const user = command('user-hook')
+    const before = { Stop: [{ hooks: [orca] }, { hooks: [user] }] }
+    const after = { Stop: [{ hooks: [user] }] }
+    const requests: CodexUserHookTrustRebaseRequest[] = []
+    _internals.setSessionRunnerSync((request) => {
+      requests.push(request)
+      return request.operation === 'inspect-user-hook-trust'
+        ? {
+            outcome: 'inspected',
+            moves: request.moves.map((move) => ({
+              ...move,
+              reportedOldKey: move.oldKey,
+              wasTrusted: true,
+              enabled: true
+            }))
+          }
+        : { outcome: 'repaired', repaired: 1 }
+    })
+
+    mutateRealHomeHooksPreservingUserTrust({
+      sourcePath: '/home/alice/.codex/hooks.json',
+      runtimeHomePath: root,
+      tomlPath: configPath,
+      host: {
+        kind: 'wsl',
+        distro: 'Ubuntu',
+        linuxRuntimeHome: '/home/alice/.codex'
+      },
+      useDefaultCodexHome: false,
+      beforeHooks: before,
+      afterHooks: after,
+      writeHooks: () => writeFileSync(hooksPath, `${JSON.stringify({ hooks: after })}\n`),
+      restoreHooks: () => {
+        throw new Error('restore must not run')
+      }
+    })
+
+    expect(requests.map((request) => request.operation)).toEqual([
+      'inspect-user-hook-trust',
+      'repair-user-hook-trust'
+    ])
+    for (const request of requests) {
+      expect(request.invocation.command).toBe('wsl.exe')
+      expect(request.invocation.args?.slice(0, 2)).toEqual(['-d', 'Ubuntu'])
+      expect(request.invocation.args?.at(-1)).toContain('export CODEX_HOME=')
+      expect(request.invocation.args?.at(-1)).toContain('/home/alice/.codex')
+      expect(request.invocation.env).toBeUndefined()
+      expect(request.invocation.envToDelete).toBeUndefined()
+      expect(request.hooksListCwd).toBe('/home/alice/.codex')
+    }
+  })
+
   it('marks the host unsupported and skips further codex sessions', () => {
     const orca = command('orca-hook')
     const user = command('user-hook')

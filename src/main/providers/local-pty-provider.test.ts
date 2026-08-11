@@ -856,6 +856,35 @@ describe('LocalPtyProvider', () => {
       expect(spawnCall[2].env.ORCA_CODEX_HOME).toBeUndefined()
     })
 
+    it('removes inherited Codex home imports for WSL system default', async () => {
+      Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' })
+      provider.configure({
+        buildSpawnEnv: (_id, env) => {
+          delete env.CODEX_HOME
+          delete env.ORCA_CODEX_HOME
+          return env
+        }
+      })
+
+      await provider.spawn({
+        cols: 80,
+        rows: 24,
+        cwd: '\\\\wsl.localhost\\Ubuntu\\home\\jin\\repo',
+        env: {
+          CODEX_HOME: 'C:\\stale\\codex-home',
+          ORCA_CODEX_HOME: 'C:\\stale\\codex-home',
+          WSLENV: 'FOO/u:CODEX_HOME/p:ORCA_CODEX_HOME/u'
+        }
+      })
+
+      const spawnEnv = spawnMock.mock.calls.at(-1)![2].env
+      expect(spawnEnv.CODEX_HOME).toBeUndefined()
+      expect(spawnEnv.ORCA_CODEX_HOME).toBeUndefined()
+      expect(spawnEnv.WSLENV?.split(':')).toContain('FOO/u')
+      expect(spawnEnv.WSLENV ?? '').not.toContain('CODEX_HOME')
+      expect(spawnEnv.WSLENV ?? '').not.toContain('ORCA_CODEX_HOME')
+    })
+
     it('does not pass a WSL managed Codex home into Windows terminals', async () => {
       Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' })
       provider.configure({

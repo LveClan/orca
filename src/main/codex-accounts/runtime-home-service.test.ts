@@ -576,7 +576,7 @@ describe('CodexRuntimeHomeService', () => {
     }
   })
 
-  it('starts WSL session bridging after materializing the WSL launch home', async () => {
+  it('routes WSL system default to the real home without materializing a runtime home', async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
     Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' })
     const startWslCodexSessionBridgeInBackground = vi.fn(() => Promise.resolve())
@@ -590,7 +590,8 @@ describe('CodexRuntimeHomeService', () => {
     }))
     const wslSystemHomePath = join(wslHome, '.codex')
     mkdirSync(wslSystemHomePath, { recursive: true })
-    writeFileSync(join(wslSystemHomePath, 'AGENTS.md'), '# WSL instructions\n', 'utf-8')
+    const systemConfigPath = join(wslSystemHomePath, 'config.toml')
+    writeFileSync(systemConfigPath, 'model = "gpt-5"\n', 'utf-8')
     const store = createStore(
       createSettings({
         activeCodexManagedAccountId: null,
@@ -610,18 +611,17 @@ describe('CodexRuntimeHomeService', () => {
         'home'
       )
 
-      expect(service.prepareForCodexLaunch({ runtime: 'wsl', wslDistro: 'Ubuntu' })).toBe(
-        wslRuntimeHomePath
-      )
-      expect(startWslCodexSessionBridgeInBackground).toHaveBeenCalledTimes(1)
-      expect(startWslCodexSessionBridgeInBackground).toHaveBeenCalledWith({
-        distro: 'Ubuntu',
-        systemCodexHomePath: wslSystemHomePath,
-        managedCodexHomePath: wslRuntimeHomePath
-      })
-      const runtimeAgentsPath = join(wslRuntimeHomePath, 'AGENTS.md')
-      expect(readFileSync(runtimeAgentsPath, 'utf-8')).toBe('# WSL instructions\n')
-      expect(lstatSync(runtimeAgentsPath).isSymbolicLink()).toBe(false)
+      const target = { runtime: 'wsl' as const, wslDistro: 'Ubuntu' }
+      expect(service.isSystemDefaultRealHomeSelected(target)).toBe(true)
+      expect(service.getSystemCodexHomePathForTarget(target)).toBe(wslSystemHomePath)
+      expect(service.prepareForCodexLaunch(target)).toBeNull()
+      expect(existsSync(wslRuntimeHomePath)).toBe(false)
+      expect(startWslCodexSessionBridgeInBackground).not.toHaveBeenCalled()
+
+      writeFileSync(systemConfigPath, 'model = "outside-edit"\n', 'utf-8')
+      expect(service.prepareForCodexLaunch(target)).toBeNull()
+      expect(readFileSync(systemConfigPath, 'utf-8')).toBe('model = "outside-edit"\n')
+      expect(existsSync(wslRuntimeHomePath)).toBe(false)
     } finally {
       vi.doUnmock('../codex/wsl-codex-session-bridge')
       vi.doUnmock('../wsl')
@@ -631,11 +631,12 @@ describe('CodexRuntimeHomeService', () => {
     }
   })
 
-  it('promotes WSL in-Codex setting changes on the next Codex launch', async () => {
+  it('keeps WSL system default on the real home when hook trust is unavailable', async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
     Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' })
+    const startWslCodexSessionBridgeInBackground = vi.fn(() => Promise.resolve())
     vi.doMock('../codex/wsl-codex-session-bridge', () => ({
-      startWslCodexSessionBridgeInBackground: vi.fn(() => Promise.resolve())
+      startWslCodexSessionBridgeInBackground
     }))
     const wslHome = join(testState.userDataDir, 'wsl-home')
     vi.doMock('../wsl', () => ({
@@ -655,6 +656,7 @@ describe('CodexRuntimeHomeService', () => {
     try {
       const { CodexRuntimeHomeService } = await import('./runtime-home-service')
       const service = new CodexRuntimeHomeService(store as never)
+      service.setRealHomeLaneGate((target) => target?.runtime !== 'wsl')
       const wslRuntimeHomePath = join(
         wslHome,
         '.local',
@@ -664,82 +666,12 @@ describe('CodexRuntimeHomeService', () => {
         'home'
       )
 
-      // First launch seeds the runtime config and records the per-distro baseline.
-      expect(service.prepareForCodexLaunch({ runtime: 'wsl', wslDistro: 'Ubuntu' })).toBe(
-        wslRuntimeHomePath
+      expect(service.prepareForCodexLaunch({ runtime: 'wsl', wslDistro: 'Ubuntu' })).toBeNull()
+      expect(existsSync(wslRuntimeHomePath)).toBe(false)
+      expect(startWslCodexSessionBridgeInBackground).not.toHaveBeenCalled()
+      expect(service.prepareForRateLimitFetch({ runtime: 'wsl', wslDistro: 'Ubuntu' })).toBe(
+        join(wslHome, '.codex')
       )
-      const baselinePath = join(wslRuntimeHomePath, '.orca-config-settings-baseline.json')
-      expect(existsSync(baselinePath)).toBe(true)
-
-      // A direct WSL Codex edit wins and is mirrored into Orca's runtime before
-      // the baseline advances, so later in-Orca changes remain promotable.
-      const runtimeConfigPath = join(wslRuntimeHomePath, 'config.toml')
-      writeFileSync(wslSystemConfigPath, 'model = "outside-edit"\n', 'utf-8')
-      service.prepareForCodexLaunch({ runtime: 'wsl', wslDistro: 'Ubuntu' })
-      expect(readFileSync(runtimeConfigPath, 'utf-8')).toBe('model = "outside-edit"\n')
-      expect(readFileSync(baselinePath, 'utf-8')).toContain('"model": "\\"outside-edit\\""')
-
-      // Codex now persists a /model change inside Orca's reconciled runtime.
-      writeFileSync(
-        runtimeConfigPath,
-        readFileSync(runtimeConfigPath, 'utf-8').replace('model = "outside-edit"', 'model = "o4"'),
-        'utf-8'
-      )
-
-      service.prepareForCodexLaunch({ runtime: 'wsl', wslDistro: 'Ubuntu' })
-      expect(readFileSync(wslSystemConfigPath, 'utf-8')).toBe('model = "o4"\n')
-      // Baseline advances so the promoted value is not re-promoted forever.
-      expect(readFileSync(baselinePath, 'utf-8')).toContain('"model": "\\"o4\\""')
-    } finally {
-      vi.doUnmock('../codex/wsl-codex-session-bridge')
-      vi.doUnmock('../wsl')
-      if (originalPlatform) {
-        Object.defineProperty(process, 'platform', originalPlatform)
-      }
-    }
-  })
-
-  it('bridges WSL history from a configured per-distro source-home override', async () => {
-    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
-    Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' })
-    const startWslCodexSessionBridgeInBackground = vi.fn(() => Promise.resolve())
-    vi.doMock('../codex/wsl-codex-session-bridge', () => ({
-      startWslCodexSessionBridgeInBackground
-    }))
-    const wslHome = join(testState.userDataDir, 'wsl-home')
-    vi.doMock('../wsl', () => ({
-      getDefaultWslDistro: () => 'Ubuntu',
-      getWslHome: () => wslHome
-    }))
-    const store = createStore(
-      createSettings({
-        activeCodexManagedAccountId: null,
-        activeCodexManagedAccountIdsByRuntime: { host: null, wsl: { Ubuntu: null } },
-        // Why: the override is a Linux path inside the distro, not <wslHome>/.codex.
-        codexSessionSourceHome: { wsl: { Ubuntu: '/home/me/.config/codex' } }
-      })
-    )
-
-    try {
-      const { CodexRuntimeHomeService } = await import('./runtime-home-service')
-      const service = new CodexRuntimeHomeService(store as never)
-      const wslRuntimeHomePath = join(
-        wslHome,
-        '.local',
-        'share',
-        'orca',
-        'codex-runtime-home',
-        'home'
-      )
-
-      service.prepareForCodexLaunch({ runtime: 'wsl', wslDistro: 'Ubuntu' })
-
-      expect(startWslCodexSessionBridgeInBackground).toHaveBeenCalledTimes(1)
-      expect(startWslCodexSessionBridgeInBackground).toHaveBeenCalledWith({
-        distro: 'Ubuntu',
-        systemCodexHomePath: '/home/me/.config/codex',
-        managedCodexHomePath: wslRuntimeHomePath
-      })
     } finally {
       vi.doUnmock('../codex/wsl-codex-session-bridge')
       vi.doUnmock('../wsl')
@@ -822,6 +754,78 @@ describe('CodexRuntimeHomeService', () => {
       vi.doUnmock('../codex/wsl-codex-session-bridge')
       vi.doUnmock('../wsl')
       vi.doUnmock('../../shared/wsl-paths')
+      if (originalPlatform) {
+        Object.defineProperty(process, 'platform', originalPlatform)
+      }
+    }
+  })
+
+  it('bridges managed WSL history from a configured per-distro source home', async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' })
+    const startWslCodexSessionBridgeInBackground = vi.fn(() => Promise.resolve())
+    vi.doMock('../codex/wsl-codex-session-bridge', () => ({
+      startWslCodexSessionBridgeInBackground
+    }))
+    const wslHome = join(testState.userDataDir, 'wsl-home')
+    vi.doMock('../wsl', () => ({
+      getDefaultWslDistro: () => 'Ubuntu',
+      getWslHome: () => wslHome
+    }))
+    const managedHomePath = createManagedAuth(
+      testState.userDataDir,
+      'wsl-account',
+      createCodexAuthJson('wsl@example.com', 'acct-wsl', 'managed-token')
+    )
+    const store = createStore(
+      createSettings({
+        codexManagedAccounts: [
+          {
+            id: 'wsl-account',
+            email: 'wsl@example.com',
+            managedHomePath,
+            managedHomeRuntime: 'wsl',
+            wslDistro: 'Ubuntu',
+            wslLinuxHomePath: '/home/me/.local/share/orca/codex-accounts/wsl-account/home',
+            providerAccountId: 'acct-wsl',
+            workspaceLabel: null,
+            workspaceAccountId: 'acct-wsl',
+            createdAt: 1,
+            updatedAt: 1,
+            lastAuthenticatedAt: 1
+          }
+        ],
+        activeCodexManagedAccountIdsByRuntime: {
+          host: null,
+          wsl: { Ubuntu: 'wsl-account' }
+        },
+        codexSessionSourceHome: { wsl: { Ubuntu: '/home/me/.config/codex' } }
+      })
+    )
+
+    try {
+      const { CodexRuntimeHomeService } = await import('./runtime-home-service')
+      const service = new CodexRuntimeHomeService(store as never)
+      const wslRuntimeHomePath = join(
+        wslHome,
+        '.local',
+        'share',
+        'orca',
+        'codex-runtime-home',
+        'home'
+      )
+
+      expect(service.prepareForCodexLaunch({ runtime: 'wsl', wslDistro: 'Ubuntu' })).toBe(
+        wslRuntimeHomePath
+      )
+      expect(startWslCodexSessionBridgeInBackground).toHaveBeenCalledWith({
+        distro: 'Ubuntu',
+        systemCodexHomePath: '/home/me/.config/codex',
+        managedCodexHomePath: wslRuntimeHomePath
+      })
+    } finally {
+      vi.doUnmock('../codex/wsl-codex-session-bridge')
+      vi.doUnmock('../wsl')
       if (originalPlatform) {
         Object.defineProperty(process, 'platform', originalPlatform)
       }
@@ -2691,14 +2695,13 @@ describe('CodexRuntimeHomeService', () => {
         'home'
       )
 
-      expect(service.prepareForCodexLaunch({ runtime: 'wsl', wslDistro: 'Ubuntu' })).toBe(
-        wslRuntimeHomePath
-      )
+      expect(service.prepareForCodexLaunch({ runtime: 'wsl', wslDistro: 'Ubuntu' })).toBeNull()
       expect(store.updateSettings).toHaveBeenCalledWith({
         activeCodexManagedAccountId: null,
         activeCodexManagedAccountIdsByRuntime: { host: null, wsl: { Ubuntu: null } }
       })
-      expect(readFileSync(join(wslRuntimeHomePath, 'auth.json'), 'utf-8')).toBe(systemAuth)
+      expect(existsSync(wslRuntimeHomePath)).toBe(false)
+      expect(readFileSync(join(systemCodexHomePath, 'auth.json'), 'utf-8')).toBe(systemAuth)
     } finally {
       if (originalPlatform) {
         Object.defineProperty(process, 'platform', originalPlatform)
@@ -2730,7 +2733,35 @@ describe('CodexRuntimeHomeService', () => {
       ].join('\n'),
       'utf-8'
     )
-    const store = createStore(createSettings())
+    const managedHomePath = createManagedAuth(
+      testState.userDataDir,
+      'wsl-account',
+      createCodexAuthJson('wsl@example.com', 'acct-wsl', 'managed-token')
+    )
+    const store = createStore(
+      createSettings({
+        codexManagedAccounts: [
+          {
+            id: 'wsl-account',
+            email: 'wsl@example.com',
+            managedHomePath,
+            managedHomeRuntime: 'wsl',
+            wslDistro: 'Ubuntu',
+            wslLinuxHomePath: '/home/alice/.local/share/orca/codex-accounts/wsl-account/home',
+            providerAccountId: 'acct-wsl',
+            workspaceLabel: null,
+            workspaceAccountId: 'acct-wsl',
+            createdAt: 1,
+            updatedAt: 1,
+            lastAuthenticatedAt: 1
+          }
+        ],
+        activeCodexManagedAccountIdsByRuntime: {
+          host: null,
+          wsl: { Ubuntu: 'wsl-account' }
+        }
+      })
+    )
 
     try {
       const { CodexRuntimeHomeService } = await import('./runtime-home-service')
@@ -3277,7 +3308,7 @@ describe('CodexRuntimeHomeService', () => {
     }
   })
 
-  it('reads WSL system-default token refreshes back to WSL system auth', async () => {
+  it('persists outgoing WSL managed tokens before returning to system default', async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
     Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' })
     const wslHome = join(testState.userDataDir, 'wsl-home')
@@ -3285,20 +3316,46 @@ describe('CodexRuntimeHomeService', () => {
       getDefaultWslDistro: () => 'Ubuntu',
       getWslHome: () => wslHome
     }))
-    const systemAuth = createCodexAuthJson('wsl@example.com', 'acct-wsl', 'system-old', 1_000)
+    const systemAuth = createCodexAuthJson(
+      'system@example.com',
+      'acct-system',
+      'system-token',
+      1_000
+    )
+    const managedAuth = createCodexAuthJson('wsl@example.com', 'acct-wsl', 'managed-old', 1_000)
     const refreshedAuth = createCodexAuthJson(
       'wsl@example.com',
       'acct-wsl',
       'runtime-refreshed',
       2_000
     )
+    const managedHomePath = createManagedAuth(testState.userDataDir, 'wsl-account', managedAuth)
     const systemCodexHomePath = join(wslHome, '.codex')
     mkdirSync(systemCodexHomePath, { recursive: true })
     writeFileSync(join(systemCodexHomePath, 'auth.json'), systemAuth, 'utf-8')
     const store = createStore(
       createSettings({
+        codexManagedAccounts: [
+          {
+            id: 'wsl-account',
+            email: 'wsl@example.com',
+            managedHomePath,
+            managedHomeRuntime: 'wsl',
+            wslDistro: 'Ubuntu',
+            wslLinuxHomePath: '/home/alice/.local/share/orca/codex-accounts/wsl-account/home',
+            providerAccountId: 'acct-wsl',
+            workspaceLabel: null,
+            workspaceAccountId: 'acct-wsl',
+            createdAt: 1,
+            updatedAt: 1,
+            lastAuthenticatedAt: 1
+          }
+        ],
         activeCodexManagedAccountId: null,
-        activeCodexManagedAccountIdsByRuntime: { host: null, wsl: { Ubuntu: null } }
+        activeCodexManagedAccountIdsByRuntime: {
+          host: null,
+          wsl: { Ubuntu: 'wsl-account' }
+        }
       })
     )
 
@@ -3317,9 +3374,15 @@ describe('CodexRuntimeHomeService', () => {
 
       expect(service.prepareForCodexLaunch(target)).toBe(wslRuntimeHomePath)
       writeFileSync(join(wslRuntimeHomePath, 'auth.json'), refreshedAuth, 'utf-8')
+      store.updateSettings({
+        activeCodexManagedAccountIdsByRuntime: { host: null, wsl: { Ubuntu: null } }
+      })
 
-      expect(service.prepareForCodexLaunch(target)).toBe(wslRuntimeHomePath)
-      expect(readFileSync(join(systemCodexHomePath, 'auth.json'), 'utf-8')).toBe(refreshedAuth)
+      service.syncForCurrentSelection(target)
+
+      expect(service.prepareForCodexLaunch(target)).toBeNull()
+      expect(readFileSync(join(managedHomePath, 'auth.json'), 'utf-8')).toBe(refreshedAuth)
+      expect(readFileSync(join(systemCodexHomePath, 'auth.json'), 'utf-8')).toBe(systemAuth)
       expect(readFileSync(join(wslRuntimeHomePath, 'auth.json'), 'utf-8')).toBe(refreshedAuth)
     } finally {
       if (originalPlatform) {
@@ -3328,7 +3391,7 @@ describe('CodexRuntimeHomeService', () => {
     }
   })
 
-  it('preserves WSL system-default token refreshes after app restart', async () => {
+  it('does not adopt stale WSL runtime auth after a system-default restart', async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
     Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' })
     const wslHome = join(testState.userDataDir, 'wsl-home')
@@ -3368,8 +3431,8 @@ describe('CodexRuntimeHomeService', () => {
       const service = new CodexRuntimeHomeService(store as never)
       const target = { runtime: 'wsl' as const, wslDistro: 'Ubuntu' }
 
-      expect(service.prepareForCodexLaunch(target)).toBe(wslRuntimeHomePath)
-      expect(readFileSync(join(systemCodexHomePath, 'auth.json'), 'utf-8')).toBe(refreshedAuth)
+      expect(service.prepareForCodexLaunch(target)).toBeNull()
+      expect(readFileSync(join(systemCodexHomePath, 'auth.json'), 'utf-8')).toBe(systemAuth)
       expect(readFileSync(join(wslRuntimeHomePath, 'auth.json'), 'utf-8')).toBe(refreshedAuth)
     } finally {
       if (originalPlatform) {

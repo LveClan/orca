@@ -8,7 +8,7 @@ import { runCodexUserHookTrustRebaseSessionSync } from './codex-app-server-grant
 import { isCodexAppServerUnsupportedError } from './codex-app-server-session'
 import { CODEX_TRUST_GRANT_TRANSIENT_RETRY_INTERVAL_MS } from './codex-hook-trust-grant'
 import { createCodexHookTrustEntry } from './codex-hook-identity'
-import { resolveCodexTrustGrantHost } from './codex-trust-grant-host'
+import { resolveCodexTrustGrantHost, type CodexTrustGrantHost } from './codex-trust-grant-host'
 import {
   captureCodexTrustConfig,
   restoreCodexTrustConfig,
@@ -125,6 +125,8 @@ export function mutateRealHomeHooksPreservingUserTrust(args: {
   sourcePath: string
   runtimeHomePath: string
   tomlPath: string
+  host?: CodexTrustGrantHost
+  useDefaultCodexHome?: boolean
   beforeHooks: HooksByEvent
   afterHooks: HooksByEvent
   writeHooks: () => void
@@ -135,7 +137,8 @@ export function mutateRealHomeHooksPreservingUserTrust(args: {
     args.writeHooks()
     return null
   }
-  const hostKey = getCodexAppServerHostKey({ kind: 'native' })
+  const host = args.host ?? { kind: 'native' }
+  const hostKey = getCodexAppServerHostKey(host)
   if (!codexAppServerCapabilityCache.shouldTry(hostKey)) {
     throw new Error('codex app-server is marked unsupported on this host; trust rebase skipped')
   }
@@ -148,11 +151,11 @@ export function mutateRealHomeHooksPreservingUserTrust(args: {
   }
   const snapshot = captureCodexTrustConfig(args.tomlPath)
 
-  const baseRequest = resolveCodexTrustGrantHost({ kind: 'native' }).buildRequest({
+  const baseRequest = resolveCodexTrustGrantHost(host).buildRequest({
     runtimeHomePath: args.runtimeHomePath,
     managedCommand: '',
     expectedTrustKeys: [],
-    useDefaultCodexHome: true
+    useDefaultCodexHome: args.useDefaultCodexHome ?? host.kind === 'native'
   })
   // Why: inspection happens before the write, so an unavailable RPC aborts
   // without shifting a user's positional trust key.

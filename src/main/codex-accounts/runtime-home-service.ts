@@ -28,7 +28,7 @@ import {
   win32 as pathWin32
 } from 'node:path'
 import { app } from 'electron'
-import type { CodexManagedAccount } from '../../shared/types'
+import type { CodexManagedAccount, GlobalSettings } from '../../shared/types'
 import { normalizeRuntimePathForComparison } from '../../shared/cross-platform-path'
 import type { Store } from '../persistence'
 import { WSL_CODEX_RUNTIME_HOME_SEGMENTS } from '../pty/codex-home-wsl-env'
@@ -222,7 +222,14 @@ export class CodexRuntimeHomeService {
   ): string | null {
     if (target?.runtime === 'wsl') {
       const wslTarget = this.resolveWslDefaultTarget(target)
+      if (this.isSystemDefaultRealHome(wslTarget, launchEnv)) {
+        this.reconcileWslManagedRuntimeBeforeRealHome(wslTarget)
+        return null
+      }
       const syncedRuntimeHomePath = this.syncWslRuntimeForCurrentSelection(wslTarget)
+      if (this.isSystemDefaultRealHome(wslTarget, launchEnv)) {
+        return null
+      }
       this.syncWslConfigAndGlobalInstructionsForLaunch(wslTarget, syncedRuntimeHomePath)
       const runtimeHomePath = syncedRuntimeHomePath ?? this.getWslSystemCodexHomePath(wslTarget)
       this.startWslSessionBridgeForLaunch(wslTarget, runtimeHomePath)
@@ -545,19 +552,48 @@ export class CodexRuntimeHomeService {
     return this.isHostSystemDefaultRealHome() ? 'real-home' : 'shared-home'
   }
 
-  // Why: the real-home hook installer flips this gate off when the trust-grant
-  // client reports the host incapable, keeping that host byte-identical to the
-  // managed lane instead of shipping status-blind panes.
-  private realHomeLaneGate: () => boolean = () => true
+  // Why: the host compatibility lane can fall back when trust-grant is
+  // unavailable. WSL system default never forks the user's Codex state for it.
+  private realHomeLaneGate: (target?: CodexAccountSelectionTarget) => boolean = () => true
 
-  setRealHomeLaneGate(gate: () => boolean): void {
+  setRealHomeLaneGate(gate: (target?: CodexAccountSelectionTarget) => boolean): void {
     this.realHomeLaneGate = gate
   }
 
-  // Why: real-home routing applies only to the host system-default selection.
-  // Managed accounts run in their own homes; Windows (no shell-startup probe)
-  // and custom CODEX_HOMEs stay on the mirror until cleanup can be tracked
-  // across old homes.
+  isSystemDefaultRealHomeSelected(
+    target?: CodexAccountSelectionTarget,
+    launchEnv?: NodeJS.ProcessEnv
+  ): boolean {
+    if (target?.runtime === 'wsl') {
+      const wslTarget = this.resolveWslDefaultTarget(target)
+      return (
+        process.platform === 'win32' &&
+        getSelectedCodexAccountIdForTarget(this.store.getSettings(), wslTarget) === null &&
+        this.getWslSystemCodexHomePath(wslTarget) !== null
+      )
+    }
+    return this.isHostSystemDefaultRealHomeSelected(launchEnv)
+  }
+
+  isSystemDefaultRealHome(
+    target?: CodexAccountSelectionTarget,
+    launchEnv?: NodeJS.ProcessEnv
+  ): boolean {
+    const gateTarget = target?.runtime === 'wsl' ? this.resolveWslDefaultTarget(target) : target
+    const selected = this.isSystemDefaultRealHomeSelected(gateTarget, launchEnv)
+    // Why: WSL system default must keep Codex state singular even when status
+    // hook trust is unavailable. Only the host compatibility lane may fall back.
+    return gateTarget?.runtime === 'wsl' ? selected : selected && this.realHomeLaneGate(gateTarget)
+  }
+
+  getSystemCodexHomePathForTarget(target?: CodexAccountSelectionTarget): string | null {
+    return target?.runtime === 'wsl'
+      ? this.getWslSystemCodexHomePath(this.resolveWslDefaultTarget(target))
+      : getSystemCodexHomePath()
+  }
+
+  // Why: host custom CODEX_HOMEs stay on the mirror until cleanup can be
+  // tracked across old homes. WSL resolves its own default home separately.
   isHostSystemDefaultRealHomeSelected(launchEnv?: NodeJS.ProcessEnv): boolean {
     const settings = this.store.getSettings()
     if (
@@ -570,7 +606,7 @@ export class CodexRuntimeHomeService {
   }
 
   isHostSystemDefaultRealHome(launchEnv?: NodeJS.ProcessEnv): boolean {
-    return this.isHostSystemDefaultRealHomeSelected(launchEnv) && this.realHomeLaneGate()
+    return this.isSystemDefaultRealHome(undefined, launchEnv)
   }
 
   reconcileLegacySharedHomeForRetainedPanes(): void {
@@ -676,6 +712,10 @@ export class CodexRuntimeHomeService {
     launchEnv?: NodeJS.ProcessEnv
   ): void {
     if (target?.runtime === 'wsl') {
+      if (this.isSystemDefaultRealHome(target, launchEnv)) {
+        this.reconcileWslManagedRuntimeBeforeRealHome(target)
+        return
+      }
       this.syncWslRuntimeForCurrentSelection(target)
       return
     }
@@ -898,7 +938,7 @@ export class CodexRuntimeHomeService {
     if (distro) {
       const settings = this.store.getSettings()
       const selectedAccountId = getSelectedCodexAccountIdForTarget(settings, target)
-      if (selectedAccountId === null) {
+      if (selectedAccountId === null && this.isSystemDefaultRealHome(target)) {
         // Why: the system-default account changes outside Orca, so read its real home directly to avoid a stale cached runtime copy.
         return this.getWslSystemCodexHomePath(target)
       }
@@ -935,44 +975,10 @@ export class CodexRuntimeHomeService {
     if (!runtimeHomePath) {
       return null
     }
-    this.wslRuntimeHomePathByDistro.set(distro, runtimeHomePath)
-
-    mkdirSync(runtimeHomePath, { recursive: true })
-    this.safeMigrateLegacyWslActiveHomePointer(distro, runtimeHomePath)
-    this.seedWslRuntimeHome(runtimeHomePath, activeAccount, distro)
-
     const runtimeAuthPath = join(runtimeHomePath, 'auth.json')
-    const previousWslAccountId = this.lastSyncedWslAccountIdByDistro.get(distro) ?? null
-    if (previousWslAccountId) {
-      if (this.skipNextReadBackForAccountId === previousWslAccountId) {
-        this.skipNextReadBackForAccountId = null
-      } else {
-        const previousWslAccount = this.getActiveAccount(
-          settings.codexManagedAccounts,
-          previousWslAccountId
-        )
-        if (previousWslAccount) {
-          this.readBackRefreshedTokensFromPath(runtimeAuthPath, {
-            updateLastWrittenAuthJson: true,
-            lastWrittenAuthJson: this.lastWrittenWslAuthJsonByDistro.get(distro) ?? null,
-            setLastWrittenAuthJson: (contents) => {
-              this.lastWrittenWslAuthJsonByDistro.set(distro, contents)
-            },
-            expectedAccountId: previousWslAccount.id
-          })
-        }
-      }
-    }
-
     const activeAuthPath = activeAccount ? join(activeAccount.managedHomePath, 'auth.json') : null
-    if (activeAccount && activeAuthPath && existsSync(activeAuthPath)) {
-      const activeAuth = readFileSync(activeAuthPath, 'utf-8')
-      this.writeRuntimeAuthAtPath(runtimeAuthPath, activeAuth)
-      this.lastWrittenWslAuthJsonByDistro.set(distro, activeAuth)
-      this.lastSyncedWslAccountIdByDistro.set(distro, activeAccount.id)
-      return runtimeHomePath
-    }
-    if (activeAccount && activeAuthPath) {
+    this.readBackPreviousWslManagedAccount(distro, settings, runtimeAuthPath)
+    if (activeAccount && activeAuthPath && !existsSync(activeAuthPath)) {
       console.warn(
         '[codex-runtime-home] Active WSL managed account is missing auth.json, restoring system default'
       )
@@ -984,6 +990,20 @@ export class CodexRuntimeHomeService {
           wslTarget
         )
       })
+      return null
+    }
+
+    this.wslRuntimeHomePathByDistro.set(distro, runtimeHomePath)
+    mkdirSync(runtimeHomePath, { recursive: true })
+    this.safeMigrateLegacyWslActiveHomePointer(distro, runtimeHomePath)
+    this.seedWslRuntimeHome(runtimeHomePath, activeAccount, distro)
+
+    if (activeAccount && activeAuthPath) {
+      const activeAuth = readFileSync(activeAuthPath, 'utf-8')
+      this.writeRuntimeAuthAtPath(runtimeAuthPath, activeAuth)
+      this.lastWrittenWslAuthJsonByDistro.set(distro, activeAuth)
+      this.lastSyncedWslAccountIdByDistro.set(distro, activeAccount.id)
+      return runtimeHomePath
     }
 
     const systemAuthPath = this.getWslSystemCodexAuthPath({ runtime: 'wsl', wslDistro: distro })
@@ -1017,6 +1037,57 @@ export class CodexRuntimeHomeService {
     this.lastWrittenWslAuthJsonByDistro.set(distro, null)
     this.lastSyncedWslAccountIdByDistro.set(distro, null)
     return runtimeHomePath
+  }
+
+  private reconcileWslManagedRuntimeBeforeRealHome(target: CodexAccountSelectionTarget): void {
+    if (process.platform !== 'win32') {
+      return
+    }
+    const wslTarget = this.resolveWslDefaultTarget(target)
+    const distro = wslTarget.wslDistro?.trim() || getDefaultWslDistro()
+    if (!distro) {
+      return
+    }
+    const runtimeHomePath = this.getWslRuntimeHomePath(distro)
+    if (!runtimeHomePath) {
+      return
+    }
+    this.readBackPreviousWslManagedAccount(
+      distro,
+      this.store.getSettings(),
+      join(runtimeHomePath, 'auth.json')
+    )
+  }
+
+  private readBackPreviousWslManagedAccount(
+    distro: string,
+    settings: GlobalSettings,
+    runtimeAuthPath: string
+  ): void {
+    const previousWslAccountId = this.lastSyncedWslAccountIdByDistro.get(distro) ?? null
+    if (!previousWslAccountId) {
+      return
+    }
+    this.lastSyncedWslAccountIdByDistro.set(distro, null)
+    if (this.skipNextReadBackForAccountId === previousWslAccountId) {
+      this.skipNextReadBackForAccountId = null
+      return
+    }
+    const previousWslAccount = this.getActiveAccount(
+      settings.codexManagedAccounts,
+      previousWslAccountId
+    )
+    if (!previousWslAccount) {
+      return
+    }
+    this.readBackRefreshedTokensFromPath(runtimeAuthPath, {
+      updateLastWrittenAuthJson: true,
+      lastWrittenAuthJson: this.lastWrittenWslAuthJsonByDistro.get(distro) ?? null,
+      setLastWrittenAuthJson: (contents) => {
+        this.lastWrittenWslAuthJsonByDistro.set(distro, contents)
+      },
+      expectedAccountId: previousWslAccount.id
+    })
   }
 
   private getWslRuntimeHomePath(distro: string): string | null {

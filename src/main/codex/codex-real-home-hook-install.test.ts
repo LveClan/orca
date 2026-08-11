@@ -40,9 +40,14 @@ vi.mock('./codex-hook-trust-grant', () => ({
 import {
   ensureRealHomeCodexHookState,
   getRealHomeCodexHookLane,
+  type RealHomeCodexHookTarget,
   _internals
 } from './codex-real-home-hook-install'
-import { getCodexManagedHookInstallMaterial } from './hook-service'
+import {
+  createCodexWslRuntimeHookInstallPlan,
+  getCodexManagedHookInstallMaterial,
+  getCodexWslManagedHookInstallMaterial
+} from './hook-service'
 import { _internals as rebaseInternals } from './codex-user-hook-trust-rebase'
 
 let fakeHomeDir: string
@@ -55,6 +60,12 @@ function getRealHooksJsonPath(): string {
 
 function getRealConfigTomlPath(): string {
   return join(fakeHomeDir, '.codex', 'config.toml')
+}
+
+function createWslRealHomeTarget(): RealHomeCodexHookTarget {
+  const runtimeHomePath = join(fakeHomeDir, 'wsl-home', '.codex')
+  mkdirSync(runtimeHomePath, { recursive: true })
+  return { runtime: 'wsl', wslDistro: 'Ubuntu', runtimeHomePath }
 }
 
 function readRealHooksJson(): {
@@ -83,6 +94,7 @@ beforeEach(() => {
   process.env.ORCA_USER_DATA_PATH = userDataDir
   homedirMock.mockReturnValue(fakeHomeDir)
   mkdirSync(join(fakeHomeDir, '.codex'), { recursive: true })
+  _internals.resetForTesting()
   _internals.setLaneForTesting('pending')
 })
 
@@ -119,6 +131,48 @@ describe('ensureRealHomeCodexHookState (install)', () => {
     expect(plan.host).toEqual({ kind: 'native' })
     expect(plan.useDefaultCodexHome).toBe(true)
     expect(plan.managedEntries.every((entry) => entry.groupIndex === 0)).toBe(true)
+  })
+
+  it('installs idempotently after user hooks in the WSL real home', () => {
+    grantSucceeds()
+    const target = createWslRealHomeTarget()
+    const hooksJsonPath = join(target.runtimeHomePath, 'hooks.json')
+    const userStop = { hooks: [{ type: 'command', command: 'user-stop.sh' }] }
+    writeFileSync(
+      hooksJsonPath,
+      `${JSON.stringify({ hooks: { Stop: [userStop] } }, null, 2)}\n`,
+      'utf-8'
+    )
+
+    expect(
+      ensureRealHomeCodexHookState({ hooksEnabled: true, userDataPath: userDataDir, target })
+    ).toBe('installed')
+    const firstRaw = readFileSync(hooksJsonPath, 'utf-8')
+    expect(
+      ensureRealHomeCodexHookState({ hooksEnabled: true, userDataPath: userDataDir, target })
+    ).toBe('installed')
+
+    const plan = createCodexWslRuntimeHookInstallPlan(target.runtimeHomePath, target)
+    expect(plan).not.toBeNull()
+    const material = getCodexWslManagedHookInstallMaterial(plan!)
+    const config = JSON.parse(firstRaw)
+    expect(config.hooks.Stop[0]).toEqual(userStop)
+    expect(config.hooks.Stop[1].hooks[0].command).toBe(material.command)
+    expect(readFileSync(hooksJsonPath, 'utf-8')).toBe(firstRaw)
+    expect(existsSync(join(target.runtimeHomePath, '.orca', 'agent-hooks', 'codex-hook.sh'))).toBe(
+      true
+    )
+    const grantPlan = grantMock.mock.calls.at(-1)![0] as CodexManagedTrustGrantPlan
+    expect(grantPlan.runtimeHomePath).toBe(target.runtimeHomePath)
+    expect(grantPlan.host).toEqual({
+      kind: 'wsl',
+      distro: 'Ubuntu',
+      linuxRuntimeHome: target.runtimeHomePath
+    })
+    expect(grantPlan.useDefaultCodexHome).toBe(false)
+    expect(grantPlan.managedEntries.find((entry) => entry.eventLabel === 'stop')?.groupIndex).toBe(
+      1
+    )
   })
 
   it('keeps a symlinked default home logical in the keys sent to Codex', () => {
@@ -286,7 +340,7 @@ describe('ensureRealHomeCodexHookState (install)', () => {
     )
 
     expect(warning).toHaveBeenCalledWith(
-      '[codex-real-home-hooks] ensure failed; staying on managed lane:',
+      '[codex-real-home-hooks] ensure failed; hook lane unavailable:',
       expect.any(Error)
     )
   })
@@ -372,6 +426,39 @@ describe('ensureRealHomeCodexHookState (install)', () => {
 })
 
 describe('ensureRealHomeCodexHookState (opt-out sweep)', () => {
+  it('removes only Orca hook and trust entries from the WSL real home', () => {
+    grantSucceeds()
+    const target = createWslRealHomeTarget()
+    const hooksJsonPath = join(target.runtimeHomePath, 'hooks.json')
+    const configTomlPath = join(target.runtimeHomePath, 'config.toml')
+    const userCommand = 'user-stop.sh'
+    const userStop = { hooks: [{ type: 'command', command: userCommand }] }
+    writeFileSync(
+      hooksJsonPath,
+      `${JSON.stringify({ hooks: { Stop: [userStop] } }, null, 2)}\n`,
+      'utf-8'
+    )
+    const userTrustEntry: CodexTrustEntry = {
+      sourcePath: hooksJsonPath,
+      eventLabel: 'stop',
+      groupIndex: 0,
+      handlerIndex: 0,
+      command: userCommand
+    }
+    writeFileSync(configTomlPath, upsertHookTrustEntriesInContent('', [userTrustEntry]), 'utf-8')
+    ensureRealHomeCodexHookState({ hooksEnabled: true, userDataPath: userDataDir, target })
+
+    expect(
+      ensureRealHomeCodexHookState({ hooksEnabled: false, userDataPath: userDataDir, target })
+    ).toBe('removed')
+
+    expect(JSON.parse(readFileSync(hooksJsonPath, 'utf-8')).hooks.Stop).toEqual([userStop])
+    expect(readHookTrustEntries(configTomlPath).has(computeTrustKey(userTrustEntry))).toBe(true)
+    expect(existsSync(join(target.runtimeHomePath, '.orca', 'agent-hooks', 'codex-hook.sh'))).toBe(
+      false
+    )
+  })
+
   it('rebases trust when a user appended hooks after Orca installed', () => {
     grantSucceeds()
     const before = { type: 'command', command: 'before.sh' }

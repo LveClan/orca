@@ -41,7 +41,7 @@ import { stripInheritedBuildModeEnv } from '../pty/build-mode-env'
 import { SessionNotFoundError } from '../daemon/daemon-errors'
 import { resolvePathEnvKey } from '../pty/windows-environment-path'
 import { isHostCodexHomeForWsl, isWslCodexHomeForHost } from '../pty/codex-home-wsl-env'
-import { addWslEnvKeys } from '../wsl-env'
+import { addWslEnvKeys, removeWslEnvKeys } from '../wsl-env'
 import {
   POWERLEVEL10K_WIZARD_DISABLE_ENV,
   seedPowerlevel10kWizardEnv
@@ -753,6 +753,9 @@ export class LocalPtyProvider implements IPtyProvider {
           delete finalEnv.ORCA_CODEX_HOME
         } else if (finalEnv.CODEX_HOME) {
           addWslEnvKeys(finalEnv, ['CODEX_HOME', 'ORCA_CODEX_HOME'])
+        }
+        if (!finalEnv.CODEX_HOME && !finalEnv.ORCA_CODEX_HOME) {
+          removeWslEnvKeys(finalEnv, ['CODEX_HOME', 'ORCA_CODEX_HOME'])
         }
         if (finalEnv.CLAUDE_CONFIG_DIR) {
           // Why: managed WSL Claude passes a Linux CLAUDE_CONFIG_DIR through wsl.exe; non-default vars need WSLENV import.

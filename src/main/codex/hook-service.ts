@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Why: getStatus + install + remove all share the managed-command and trust-key derivation. Splitting would hide that the three operations must agree on group index, event label, and command bytes. */
 import { existsSync, readFileSync, statSync, unlinkSync } from 'node:fs'
-import { join, win32 as pathWin32 } from 'node:path'
+import { join, posix as pathPosix, win32 as pathWin32 } from 'node:path'
 import type { SFTPWrapper } from 'ssh2'
 import type { AgentHookInstallState, AgentHookInstallStatus } from '../../shared/agent-hook-types'
 import {
@@ -168,6 +168,24 @@ export function getCodexManagedHookInstallMaterial(): CodexManagedHookInstallMat
     scriptPath,
     command: getManagedCommand(scriptPath),
     script: getManagedScript()
+  }
+}
+
+export function buildCodexWslManagedHookCommand(linuxRuntimeHome: string): string {
+  return wrapReadablePosixHookCommand(
+    pathPosix.join(linuxRuntimeHome, '.orca', 'agent-hooks', 'codex-hook.sh')
+  )
+}
+
+export function getCodexWslManagedHookInstallMaterial(
+  plan: CodexWslRuntimeHookInstallPlan
+): CodexManagedHookInstallMaterial {
+  return {
+    events: CODEX_EVENTS,
+    eventLabel: CODEX_EVENT_LABEL,
+    scriptPath: plan.scriptPath,
+    command: wrapReadablePosixHookCommand(plan.commandScriptPath),
+    script: getManagedScript('posix')
   }
 }
 

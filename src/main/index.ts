@@ -218,7 +218,9 @@ import { normalizeClaudeRuntimeSelection } from './claude-accounts/runtime-selec
 import { codexHookService, setSystemCodexHomeHookSweepSuppressed } from './codex/hook-service'
 import {
   ensureRealHomeCodexHookState,
-  isRealHomeCodexHookLaneUsable
+  isRealHomeCodexHookLaneUsable,
+  sweepKnownWslRealHomeCodexHooks,
+  type RealHomeCodexHookTarget
 } from './codex/codex-real-home-hook-install'
 import { setCodexTrustGrantTelemetry } from './codex/codex-trust-grant-telemetry'
 import { startCodexSessionBackfillInBackground } from './codex/codex-session-backfill'
@@ -986,20 +988,26 @@ function prepareCodexRuntimeHomeForLaunch(
       console.warn('[codex-project-trust] failed to pre-mark launch workspace:', error)
     }
   }
+  const realHomeHookTarget = resolveRealHomeCodexHookTarget(target)
   const ensureRealHomeHooksIfSelected = (): boolean => {
-    if (
-      target?.runtime === 'wsl' ||
-      !codexRuntimeHome!.isHostSystemDefaultRealHomeSelected(launchEnv)
-    ) {
+    if (!codexRuntimeHome!.isSystemDefaultRealHomeSelected(target, launchEnv)) {
+      if (realHomeHookTarget) {
+        ensureRealHomeCodexHookState({
+          hooksEnabled: false,
+          userDataPath: app.getPath('userData'),
+          target: realHomeHookTarget
+        })
+      }
       return false
     }
-    // Why (flag ON, system default): the hook entry must exist — appended last
+    // Why (system default): the hook entry must exist — appended last
     // and trusted by codex's own app-server grant — in the real ~/.codex before
-    // the pane spawns. An incapable grant flips the lane gate so the launch
-    // below falls back to the managed home instead of a status-blind pane.
+    // the pane spawns. Host can fall back when grant is unavailable; WSL keeps
+    // its real home authoritative and degrades status reporting only.
     ensureRealHomeCodexHookState({
       hooksEnabled: isAgentStatusHooksEnabled(store?.getSettings()),
-      userDataPath: app.getPath('userData')
+      userDataPath: app.getPath('userData'),
+      ...(realHomeHookTarget ? { target: realHomeHookTarget } : {})
     })
     return true
   }
@@ -1018,7 +1026,7 @@ function prepareCodexRuntimeHomeForLaunch(
       })
     }
   }
-  if (runtimeHomePath === null && target?.runtime !== 'wsl') {
+  if (runtimeHomePath === null) {
     // Why: Codex runs on the user's real ~/.codex; the managed-home hook
     // install below would target a home Codex never reads on this lane.
     return null
@@ -1058,6 +1066,23 @@ function prepareCodexRuntimeHomeForLaunch(
     )
   }
   return runtimeHomePath
+}
+
+function resolveRealHomeCodexHookTarget(
+  target?: CodexAccountSelectionTarget
+): RealHomeCodexHookTarget | undefined {
+  if (target?.runtime !== 'wsl' || !codexRuntimeHome) {
+    return undefined
+  }
+  const wslDistro = target.wslDistro?.trim() || getDefaultWslDistro()
+  if (!wslDistro) {
+    return undefined
+  }
+  const runtimeHomePath = codexRuntimeHome.getSystemCodexHomePathForTarget({
+    runtime: 'wsl',
+    wslDistro
+  })
+  return runtimeHomePath ? { runtime: 'wsl', wslDistro, runtimeHomePath } : undefined
 }
 
 async function prepareCodexSessionResumeForLaunch(args: {
@@ -2178,6 +2203,7 @@ void app.whenReady().then(async () => {
         wslHookRelayManager.resumeStoppedRelays()
       } else {
         wslHookRelayManager.disposeAll({ permanent: false })
+        sweepKnownWslRealHomeCodexHooks(app.getPath('userData'))
       }
     }
   })
@@ -2322,13 +2348,19 @@ void app.whenReady().then(async () => {
   rateLimits = new RateLimitService()
   codexRuntimeHome = new CodexRuntimeHomeService(store)
   void startCodexStateDbBackfillRecoveryInBackground(getOrcaManagedCodexHomePath())
-  // Why: an incapable trust-grant host must fall back to the managed home for
-  // every consumer (PTY env, rate limits, commit messages) in one place.
-  codexRuntimeHome.setRealHomeLaneGate(() => isRealHomeCodexHookLaneUsable())
+  // Why: an incapable host trust-grant lane falls back consistently for PTY
+  // env, rate limits, and commit messages. WSL never forks system-default state.
+  codexRuntimeHome.setRealHomeLaneGate((target) =>
+    isRealHomeCodexHookLaneUsable(
+      target?.runtime === 'wsl' && target.wslDistro
+        ? { runtime: 'wsl', wslDistro: target.wslDistro }
+        : undefined
+    )
+  )
   // Why: while the real-home lane owns ~/.codex/hooks.json, the legacy
   // system-home sweep inside managed installs would delete the entry the
-  // real-home installer just appended. Flag OFF, hooks off, or an incapable
-  // trust lane re-arms the sweep so downgrade, opt-out, and rollback converge.
+  // real-home installer just appended. Hooks off or an incapable trust lane
+  // re-arms the sweep so opt-out and rollback converge.
   setSystemCodexHomeHookSweepSuppressed(
     () =>
       codexRuntimeHome !== null &&

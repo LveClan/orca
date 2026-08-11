@@ -4145,20 +4145,26 @@ describe('registerPtyHandlers', () => {
         expect(env.NO_PROXY).toBe('localhost,*.internal')
       })
 
-      it('skips host Codex home when a daemon-backed Windows spawn targets a WSL cwd', async () => {
+      it('deletes Codex home overrides for a daemon-backed WSL system-default spawn', async () => {
         const originalPlatform = process.platform
         Object.defineProperty(process, 'platform', {
           configurable: true,
           value: 'win32'
         })
         try {
+          const resolvedTargets: unknown[] = []
+          const resolveHome = (target: unknown): null => {
+            resolvedTargets.push(target)
+            return null
+          }
           const spawnOptions = await daemonSpawnAndGetOptions(
             {},
-            () => 'C:\\Users\\test\\AppData\\Roaming\\Orca\\codex-runtime-home\\home',
+            resolveHome,
             undefined,
             {
               CODEX_HOME: 'C:\\Users\\test\\AppData\\Roaming\\Orca\\codex-runtime-home\\home',
-              ORCA_CODEX_HOME: 'C:\\Users\\test\\AppData\\Roaming\\Orca\\codex-runtime-home\\home'
+              ORCA_CODEX_HOME: 'C:\\Users\\test\\AppData\\Roaming\\Orca\\codex-runtime-home\\home',
+              WSLENV: 'FOO/u:CODEX_HOME/p:ORCA_CODEX_HOME/u'
             },
             {
               cwd: '\\\\wsl.localhost\\Ubuntu\\home\\test\\repo',
@@ -4168,9 +4174,43 @@ describe('registerPtyHandlers', () => {
           const { env } = spawnOptions
           expect(env.CODEX_HOME).toBeUndefined()
           expect(env.ORCA_CODEX_HOME).toBeUndefined()
+          expect(env.WSLENV).toBe('FOO/u')
           expect(spawnOptions.envToDelete).toEqual(
             expect.arrayContaining(['CODEX_HOME', 'ORCA_CODEX_HOME'])
           )
+          expect(resolvedTargets[0]).toEqual({
+            runtime: 'wsl',
+            wslDistro: 'Ubuntu'
+          })
+        } finally {
+          Object.defineProperty(process, 'platform', {
+            configurable: true,
+            value: originalPlatform
+          })
+        }
+      })
+
+      it('keeps an isolated home for a daemon-backed WSL managed-account spawn', async () => {
+        const originalPlatform = process.platform
+        Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' })
+        const managedHome =
+          '\\\\wsl.localhost\\Ubuntu\\home\\test\\.local\\share\\orca\\codex-runtime-home\\home'
+        try {
+          const spawnOptions = await daemonSpawnAndGetOptions(
+            {},
+            () => managedHome,
+            undefined,
+            undefined,
+            {
+              cwd: '\\\\wsl.localhost\\Ubuntu\\home\\test\\repo',
+              worktreeId: 'repo-1::\\\\wsl.localhost\\Ubuntu\\home\\test\\repo'
+            }
+          )
+
+          expect(spawnOptions.env.CODEX_HOME).toBe(managedHome)
+          expect(spawnOptions.env.ORCA_CODEX_HOME).toBe(managedHome)
+          expect(spawnOptions.envToDelete ?? []).not.toContain('CODEX_HOME')
+          expect(spawnOptions.envToDelete ?? []).not.toContain('ORCA_CODEX_HOME')
         } finally {
           Object.defineProperty(process, 'platform', {
             configurable: true,
