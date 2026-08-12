@@ -4,6 +4,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import type * as LocalPtyUtils from '../providers/local-pty-utils'
+import type * as WslModule from '../wsl'
 
 const {
   spawnMock,
@@ -57,6 +58,11 @@ vi.mock('../providers/local-pty-utils', async (importOriginal) => {
     validateWorkingDirectory: validateWorkingDirectoryMock
   }
 })
+
+vi.mock('../wsl', async (importOriginal) => ({
+  ...(await importOriginal<typeof WslModule>()),
+  getDefaultWslDistro: () => null
+}))
 
 vi.mock('../providers/agent-foreground-process', () => ({
   resolveAgentForegroundProcessWithAvailability: async (...args: unknown[]) => {

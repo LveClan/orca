@@ -37,7 +37,7 @@ import { removeAppImageRuntimeEnv } from '../pty/appimage-terminal-env'
 import { stripInheritedBuildModeEnv } from '../pty/build-mode-env'
 import { resolvePathEnvKey } from '../pty/windows-environment-path'
 import { parseWslPath } from '../wsl'
-import { addWslEnvKeys } from '../wsl-env'
+import { addWslEnvKeys, removeWslEnvKeys } from '../wsl-env'
 import {
   gitCredentialPromptGuardEnv,
   mergeGitConfigEnvProtocol
@@ -143,11 +143,12 @@ function deleteRequestedDaemonEnvKeys(
     keys?.includes('ORCA_CODEX_HOME') === true &&
     env.ORCA_CODEX_HOME !== undefined &&
     env.CODEX_HOME === env.ORCA_CODEX_HOME
-  for (const key of keys ?? []) {
+  const deletedKeys = deleteOrcaOwnedCodexHome ? [...(keys ?? []), 'CODEX_HOME'] : (keys ?? [])
+  for (const key of deletedKeys) {
     delete env[key]
   }
-  if (deleteOrcaOwnedCodexHome) {
-    delete env.CODEX_HOME
+  if (process.platform === 'win32' && deletedKeys.length > 0) {
+    removeWslEnvKeys(env, deletedKeys)
   }
 }
 
