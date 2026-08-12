@@ -316,6 +316,7 @@ const MOBILE_RPC_METHOD_ALLOWLIST = new Set([
   'host.wsl.isAvailable',
   'host.wsl.listDistros',
   'hostedReview.create',
+  'hostedReview.createStacked',
   'hostedReview.forBranch',
   'hostedReview.getCreationEligibility',
   'linear.getCustomView',
@@ -715,6 +716,7 @@ export class OrcaRuntimeRpcServer {
       endpoint,
       deviceToken: device.token,
       publicKeyB64,
+      pairedDeviceId: device.deviceId,
       scope
     })
     return {
@@ -927,6 +929,7 @@ export class OrcaRuntimeRpcServer {
         endpoint: direct.endpoint,
         deviceToken: device.token,
         publicKeyB64,
+        pairedDeviceId: device.deviceId,
         scope: 'mobile',
         relay: relayPairing.relay
       })

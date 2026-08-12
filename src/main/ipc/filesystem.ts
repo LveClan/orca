@@ -5,7 +5,7 @@ import type { FileHandle } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { dirname, extname, join, resolve } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
-import { gitExecFileAsync, wslAwareSpawn } from '../git/runner'
+import { awaitWindowsHostGitEnvironmentReady, gitExecFileAsync, wslAwareSpawn } from '../git/runner'
 import { parseWslPath, toWindowsWslPath } from '../wsl'
 import { tryDeleteWslUncPath } from '../wsl-unc-delete'
 import type { Store } from '../persistence'
@@ -2076,6 +2076,7 @@ export function registerFilesystemHandlers(
         }
         const results = await provider.getBranchDiff(args.worktreePath, args.compare.mergeBase, {
           includePatch: true,
+          headOid: args.compare.headOid,
           filePath: args.filePath,
           oldPath: args.oldPath
         })
@@ -2321,6 +2322,7 @@ export function registerFilesystemHandlers(
         return provider.getRemoteFileUrl(args.worktreePath, args.relativePath, args.line)
       }
       const worktreePath = await resolveRegisteredWorktreePath(args.worktreePath, store)
+      await awaitWindowsHostGitEnvironmentReady({ cwd: worktreePath })
       return getRemoteFileUrl(worktreePath, args.relativePath, args.line)
     }
   )
@@ -2341,6 +2343,7 @@ export function registerFilesystemHandlers(
         return provider.getRemoteCommitUrl(args.worktreePath, sha)
       }
       const worktreePath = await resolveRegisteredWorktreePath(args.worktreePath, store)
+      await awaitWindowsHostGitEnvironmentReady({ cwd: worktreePath })
       return getRemoteCommitUrl(worktreePath, sha)
     }
   )

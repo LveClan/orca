@@ -670,7 +670,9 @@ export class LocalPtyProvider implements IPtyProvider {
     }
 
     ensureNodePtySpawnHelperExecutable()
-    validateWorkingDirectory(validationCwd)
+    if (args.prevalidatedCwd !== validationCwd) {
+      validateWorkingDirectory(validationCwd)
+    }
 
     const spawnEnv: Record<string, string> = {
       ...mergeGitConfigEnvProtocol(stripInheritedBuildModeEnv(process.env), args.env),
@@ -720,6 +722,9 @@ export class LocalPtyProvider implements IPtyProvider {
     // Why: app-level env hooks can re-add scrubbed vars; delete last so shims like Claude Agent Teams keep their PATH.
     for (const key of args.envToDelete ?? []) {
       delete finalEnv[key]
+    }
+    if (isWslShell && args.envToDelete?.length) {
+      removeWslEnvKeys(finalEnv, args.envToDelete)
     }
     if (args.env?.TERM) {
       finalEnv.TERM = args.env.TERM
