@@ -13647,9 +13647,7 @@
           "33741dd973": "Volver a carreras"
         },
         "AutomationSchedulePicker": {
-          "22359b186a": "mañana o tarde",
           "9e677335b0": "Minuto",
-          "6b802ecc99": "Hora",
           "d90981f766": "Tiempo",
           "6b914c5fbb": "Día",
           "233b8c94b6": "Cadencia",
@@ -13658,6 +13656,11 @@
           "57e83307d0": "Días laborables",
           "837d902bba": "Semanal",
           "ddba78647e": "Cron personalizado"
+        },
+        "AutomationTimeField": {
+          "39ec1383f6": "mañana o tarde",
+          "32a5e4e35e": "Minuto",
+          "aa593eb5e2": "Hora"
         },
         "AutomationSessionField": {
           "f3c76dce51": "Reutilizar",

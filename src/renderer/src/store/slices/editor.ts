@@ -4163,7 +4163,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
   // Why: session-local conflict tracking (Resolved-locally) lives only in the renderer; main returns raw git status, so the renderer owns conflictStatusSource.
   setGitStatus: (worktreeId, status) =>
     set((s) => {
-      const hadStatusEntry = Object.prototype.hasOwnProperty.call(s.gitStatusByWorktree, worktreeId)
+      const hadStatusEntry = Object.hasOwn(s.gitStatusByWorktree, worktreeId)
       const prevEntries = s.gitStatusByWorktree[worktreeId] ?? []
       const prevOperation = s.gitConflictOperationByWorktree[worktreeId] ?? 'unknown'
       const currentTracked = { ...s.trackedConflictPathsByWorktree[worktreeId] }

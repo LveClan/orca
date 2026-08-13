@@ -160,6 +160,7 @@ type FolderWorkspaceUpdates = Partial<
     | 'pendingFirstAgentMessageRename'
     | 'firstAgentMessageRenameError'
     | 'lastActivityAt'
+    | 'diffComments'
   >
 >
 
@@ -888,9 +889,7 @@ function areCatalogEntriesEqual(a: unknown, b: unknown): boolean {
   if (keys.length !== Object.keys(b).length) {
     return false
   }
-  return keys.every(
-    (key) => Object.prototype.hasOwnProperty.call(b, key) && areCatalogEntriesEqual(a[key], b[key])
-  )
+  return keys.every((key) => Object.hasOwn(b, key) && areCatalogEntriesEqual(a[key], b[key]))
 }
 
 // Why: returning `base` unchanged keeps referential-equality selectors quiet, so a
@@ -2693,6 +2692,20 @@ export const createRepoSlice: StateCreator<AppState, [], [], RepoSlice> = (set, 
               )
             ).folderWorkspace
       if (!updated) {
+        await reconcileFailedFolderWorkspaceUpdate({
+          target,
+          folderWorkspaceId,
+          updateIdentity,
+          ownerHostId,
+          ticket: updateTicket,
+          coordinator: folderWorkspaceUpdates,
+          set,
+          get
+        })
+        return false
+      }
+      if (updates.diffComments !== undefined && updated.diffComments === undefined) {
+        // Why: older paired runtimes strip this optional field; reconcile instead of showing an unsaved note.
         await reconcileFailedFolderWorkspaceUpdate({
           target,
           folderWorkspaceId,

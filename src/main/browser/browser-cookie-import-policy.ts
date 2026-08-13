@@ -196,8 +196,7 @@ export async function restoreImportedDomainCookies(
   }
 }
 
-// Why: clearStorageData wipes the whole jar, including the non-transplantable families an
-// import is never allowed to remove; this is the clear step that can leave them in place.
+// Why: Electron cannot round-trip partition identity, so excluded cookies must never be removed.
 export async function removeAllCookiesExcept(
   store: Pick<Cookies, 'get' | 'remove' | 'set'>,
   isExcluded: (cookie: Cookie) => boolean
@@ -224,7 +223,7 @@ export async function removeAllCookiesExcept(
     [...removableGroups.values()],
     COOKIE_CLEAR_CONCURRENCY,
     async (group) => {
-      // Why: identical remove keys must stay ordered so duplicate scoped cookies are not raced.
+      // Why: identical removal coordinates must stay ordered instead of racing.
       for (const { cookie, url } of group) {
         await store.remove(url, cookie.name)
         removedCookies.push(cookie)

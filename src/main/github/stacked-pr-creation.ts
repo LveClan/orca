@@ -209,7 +209,7 @@ function registeredStackNumber(
   )
   // Why: a miss is -1, and -1 + 1 reads the first entry — which reports "already
   // registered" whenever the current PR heads a stack the parent has left.
-  if (parentPosition < 0) {
+  if (parentPosition === -1) {
     return null
   }
   return parentStack.pull_requests[parentPosition + 1]?.number === currentReview.number

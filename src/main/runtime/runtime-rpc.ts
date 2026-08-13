@@ -1409,7 +1409,7 @@ export class OrcaRuntimeRpcServer {
     // never orphan a running 0.0.0.0 listener outside activeTransports (and thus outside stop()).
     this.activeTransports[index] = widened.transport
     const metaIndex = this.transports.findIndex((meta) => meta.kind === 'websocket')
-    if (metaIndex >= 0) {
+    if (metaIndex !== -1) {
       this.transports[metaIndex] = { kind: 'websocket', endpoint: widened.endpoint }
     }
     try {
@@ -1451,7 +1451,7 @@ export class OrcaRuntimeRpcServer {
       )
       this.activeTransports.splice(index, 1)
       const metaIndex = this.transports.findIndex((meta) => meta.kind === 'websocket')
-      if (metaIndex >= 0) {
+      if (metaIndex !== -1) {
         this.transports.splice(metaIndex, 1)
       }
       this.wsBoundHost = null
@@ -1466,7 +1466,7 @@ export class OrcaRuntimeRpcServer {
     // orphan a live transport outside activeTransports (and thus outside stop()).
     this.activeTransports[index] = restored.transport
     const metaIndex = this.transports.findIndex((meta) => meta.kind === 'websocket')
-    if (metaIndex >= 0) {
+    if (metaIndex !== -1) {
       this.transports[metaIndex] = { kind: 'websocket', endpoint: restored.endpoint }
     }
     try {

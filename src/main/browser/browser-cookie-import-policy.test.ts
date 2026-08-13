@@ -208,18 +208,21 @@ describe('NON_TRANSPLANTABLE_HOST_KEY_SQL', () => {
 })
 
 describe('removeAllCookiesExcept', () => {
-  it('removes only the cookies the predicate does not exclude', async () => {
+  it('never removes or reconstructs excluded Google cookies', async () => {
     const get = vi
       .fn()
       .mockResolvedValue([
         cookie('.google.com', 'SID'),
+        cookie('accounts.google.com', 'ACCOUNT'),
         cookie('.example.com', 'session'),
         cookie('other.test', 'tracker', '/scoped')
       ])
     const remove = vi.fn().mockResolvedValue(undefined)
     const set = vi.fn().mockResolvedValue(undefined)
 
-    await removeAllCookiesExcept({ get, remove, set }, (c) => c.domain === '.google.com')
+    await removeAllCookiesExcept({ get, remove, set }, (existingCookie) =>
+      isNonTransplantableCookieDomain(existingCookie.domain ?? '')
+    )
 
     expect(remove.mock.calls).toEqual([
       ['https://example.com/', 'session'],
@@ -228,10 +231,11 @@ describe('removeAllCookiesExcept', () => {
     expect(set).not.toHaveBeenCalled()
   })
 
-  it('restores every successfully removed cookie when another removal fails', async () => {
+  it('restores removed non-Google cookies when another removal fails', async () => {
     const get = vi
       .fn()
       .mockResolvedValue([
+        cookie('.google.com', 'SID'),
         cookie('.example.com', 'first', '/one'),
         cookie('.example.com', 'second', '/two'),
         cookie('.example.com', 'third', '/three')
@@ -243,11 +247,13 @@ describe('removeAllCookiesExcept', () => {
     })
     const set = vi.fn().mockResolvedValue(undefined)
 
-    await expect(removeAllCookiesExcept({ get, remove, set }, () => false)).rejects.toThrow(
-      'Could not clear existing cookies'
-    )
+    await expect(
+      removeAllCookiesExcept({ get, remove, set }, (existingCookie) =>
+        isNonTransplantableCookieDomain(existingCookie.domain ?? '')
+      )
+    ).rejects.toThrow('Could not clear existing cookies')
     expect(remove).toHaveBeenCalledTimes(3)
-    expect(set.mock.calls.map(([details]) => details.name)).toEqual(['first', 'third'])
+    expect(set.mock.calls.map(([details]) => details.name).sort()).toEqual(['first', 'third'])
   })
 
   it('bounds parallel removals so large cookie jars do not clear serially or fan out', async () => {

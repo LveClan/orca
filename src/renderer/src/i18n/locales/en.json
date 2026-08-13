@@ -756,7 +756,8 @@
           "import": {
             "toast": {
               "restartFallbackUnavailableNone": "None of the {{value0}} cookies could be loaded, and the restart fallback was unavailable. The previous cookies for this profile were replaced. Try the import again.",
-              "restartFallbackUnavailablePartial": "Imported {{value0}} of {{value1}} cookies. The rest could not be loaded, and the restart fallback was unavailable. Try the import again."
+              "restartFallbackUnavailablePartial": "Imported {{value0}} of {{value1}} cookies. The rest could not be loaded, and the restart fallback was unavailable. Try the import again.",
+              "googleCookiesSkipped": "Google cookies were not imported. Open a browser in Orca on {{value0}} with this profile, then sign into Google."
             }
           }
         }
@@ -909,7 +910,8 @@
         "artifactsTitle": "Artifacts",
         "artifactsDescription": "Share HTML and Markdown files with your team and manage their public links.",
         "automationsTitle": "Automations",
-        "automationsDescription": "Schedule agent work and choose whether Automations appears in the sidebar."
+        "automationsDescription": "Schedule agent work and choose whether Automations appears in the sidebar.",
+        "floatingWorkspaceWebDescription": "Global terminal and markdown tabs."
       },
       "useAppMenuPaste": {
         "pasteTooLarge": "Paste is too large."
@@ -925,6 +927,10 @@
       }
     },
     "components": {
+      "BrowserCookieImportDisclosure": {
+        "title": "Google logins aren't imported",
+        "description": "Sign in to Google directly in Orca."
+      },
       "CodexRestartChip": {
         "a4c8e1b2f7": "Codex is still signed in as {{value0}}",
         "c72a5fb234": "Restart",
@@ -5857,8 +5863,7 @@
           "a3f8c2d1e0b4": "Imported {{value0}} cookies from {{value1}} ({{value2}}) into {{value3}}.",
           "b4e9d3f2a1c5": "Imported {{value0}} cookies from {{value1}} into {{value2}}.",
           "c5a273a809": "From {{value0}}",
-          "b5c0479e21": "Unmodified user agent",
-          "654a0c2073": "Google requires signing in directly - imports skip it."
+          "b5c0479e21": "Unmodified user agent"
         },
         "BrowserUseComputerUseNotice": {
           "15b5e680ba": "Open Computer Use",
@@ -6780,6 +6785,12 @@
           "77410e0566": "Privacy policy",
           "8bfdd23a88": "Help us figure out what to build next. Orca sends anonymous counts of which features you use and where things break.",
           "afec8b03be": "ci"
+        },
+        "QuickCommandsList": {
+          "noSearchMatches": "No commands match this search."
+        },
+        "QuickCommandsToolbar": {
+          "searchLabel": "Search commands"
         },
         "QuickCommandsPane": {
           "8764c6e9e4": "Remove {{value0}}",
@@ -14207,8 +14218,7 @@
             "bf648471c5": "Creating…",
             "53bbe3dab4": "Imported {{value0}} cookies from file.",
             "c5f0e4d3b2a1": "Imported {{value0}} cookies from {{value1}} ({{value2}}).",
-            "d6a1f5e4c3b2": "Imported {{value0}} cookies from {{value1}}.",
-            "c186b4d890": "Google requires signing in directly - imports skip it."
+            "d6a1f5e4c3b2": "Imported {{value0}} cookies from {{value1}}."
           },
           "GrabConfirmationSheet": {
             "314a0aaa5b": "Attach to AI",
@@ -14350,9 +14360,7 @@
           "33741dd973": "Back to runs"
         },
         "AutomationSchedulePicker": {
-          "22359b186a": "AM or PM",
           "9e677335b0": "Minute",
-          "6b802ecc99": "Hour",
           "d90981f766": "Time",
           "6b914c5fbb": "Day",
           "233b8c94b6": "Cadence",
@@ -14361,6 +14369,11 @@
           "57e83307d0": "Weekdays",
           "837d902bba": "Weekly",
           "ddba78647e": "Custom cron"
+        },
+        "AutomationTimeField": {
+          "39ec1383f6": "AM or PM",
+          "32a5e4e35e": "Minute",
+          "aa593eb5e2": "Hour"
         },
         "AutomationSessionField": {
           "f3c76dce51": "Reuse",

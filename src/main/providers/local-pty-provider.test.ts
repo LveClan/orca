@@ -15,7 +15,8 @@ const {
   readWindowsConptyProcessIdsMock,
   killWithDescendantSweepMock,
   isWslAvailableAsyncMock,
-  wslUncDirectoryExistsMock
+  wslUncDirectoryExistsMock,
+  createShellPromptReadinessProbeMock
 } = vi.hoisted(() => ({
   existsSyncMock: vi.fn(),
   statSyncMock: vi.fn(),
@@ -28,7 +29,8 @@ const {
   readWindowsConptyProcessIdsMock: vi.fn(),
   killWithDescendantSweepMock: vi.fn(),
   isWslAvailableAsyncMock: vi.fn(),
-  wslUncDirectoryExistsMock: vi.fn()
+  wslUncDirectoryExistsMock: vi.fn(),
+  createShellPromptReadinessProbeMock: vi.fn()
 }))
 
 vi.mock('fs', () => ({
@@ -107,6 +109,10 @@ vi.mock('../wsl', () => ({
   wslUncDirectoryExists: (...args: unknown[]) => wslUncDirectoryExistsMock(...args)
 }))
 
+vi.mock('../shell-prompt-readiness-probe', () => ({
+  createShellPromptReadinessProbe: createShellPromptReadinessProbeMock
+}))
+
 import {
   _resetLocalPtyProviderStateForTest,
   LOCAL_PTY_FORCE_KILL_RETRY_MS,
@@ -174,6 +180,7 @@ describe('LocalPtyProvider', () => {
     isWslAvailableAsyncMock.mockResolvedValue(true)
     wslUncDirectoryExistsMock.mockReset()
     wslUncDirectoryExistsMock.mockReturnValue(true)
+    createShellPromptReadinessProbeMock.mockReset()
 
     exitCb = undefined
     mockProc = {
@@ -532,6 +539,24 @@ describe('LocalPtyProvider', () => {
 
       const spawnCall = spawnMock.mock.calls.at(-1)!
       expect(spawnCall[2].env.CUSTOM_VAR).toBe('custom-value')
+    })
+
+    it('verifies shell identity against the exact spawn PATH', async () => {
+      provider.configure({
+        buildSpawnEnv: (_id, env) => ({ ...env, PATH: '/post-hook/bin' })
+      })
+
+      await provider.spawn({
+        cols: 80,
+        rows: 24,
+        command: 'printf ready',
+        env: { PATH: '/pre-hook/bin' }
+      })
+
+      expect(spawnMock.mock.calls.at(-1)?.[2].env.PATH).toBe('/post-hook/bin')
+      expect(createShellPromptReadinessProbeMock).toHaveBeenCalledWith(
+        expect.objectContaining({ shellPathEnv: '/post-hook/bin' })
+      )
     })
 
     it('does not inherit NODE_ENV from the Orca process env', async () => {
